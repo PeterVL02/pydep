@@ -1,20 +1,289 @@
+"""Static analysis that maps every module-level symbol to what it depends on.
+
+Node ids in the graph:
+- ``pkg.mod:name`` is a symbol (function, class, constant or import) of a project module.
+- ``pkg.mod:<module>`` is the module's top-level code that isn't a definition.
+- ``pkg.mod`` is a project module; it depends on everything the module binds.
+- Anything else without a colon is an external module, e.g. ``numpy`` or ``os.path``.
+A ``module:name`` id that is not a graph key is a name that couldn't be resolved.
+"""
+
+import ast
+import builtins
+import symtable
+import sys
+from collections.abc import Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Literal
 
-def find_resources(file: Path) -> list[Callable[[...], ...] | None]:
-    """
-    Find all resources in the given file.
+MODULE_CODE = "<module>"
+BUILTIN_NAMES = set(dir(builtins)) | {
+    "__file__",
+    "__builtins__",
+    "__path__",
+    "__cached__",
+    "__annotations__",
+    "__annotate__",
+    "__conditional_annotations__",
+}
 
-    Args:
-        file (Path): The path to the python file to search for resources.
+type Category = Literal["project", "third-party", "stdlib", "unresolved"]
+
+
+@dataclass
+class DependencyGraph:
+    edges: dict[str, set[str]] = field(default_factory=dict)
+    aliases: set[str] = field(default_factory=set)  # nodes bound only by imports
+
+
+def build_graph(path: Path) -> DependencyGraph:
+    """Analyse the Python file at `path` and return its dependency graph."""
+    graph = DependencyGraph()
+    analyze_module(path.read_text(encoding="utf-8"), path.stem, str(path), graph)
+    return graph
+
+
+def analyze_module(
+    source: str, module: str, filename: str, graph: DependencyGraph
+) -> None:
+    """Add the symbols of one module and their direct dependencies to `graph`."""
+    tree = ast.parse(source, filename)
+    statements = list(flatten_statements(tree.body))
+    reads: dict[str, set[str]] = {}
+    imports: dict[str, set[str]] = {}
+    definitions: set[str] = set()
+    spans: list[tuple[int, int, list[str]]] = []
+
+    for stmt in statements:
+        if isinstance(stmt, ast.Import | ast.ImportFrom):
+            for name, target in import_bindings(stmt):
+                imports.setdefault(name, set()).add(target)
+            continue
+        owners = statement_owners(stmt)
+        definitions.update(owner for owner in owners if owner != MODULE_CODE)
+        for owner in owners:
+            reads.setdefault(owner, set()).update(module_reads(stmt))
+        start = min(
+            [stmt.lineno, *(d.lineno for d in getattr(stmt, "decorator_list", []))]
+        )
+        spans.append((start, stmt.end_lineno or stmt.lineno, owners))
+
+    def_lines = {
+        s.lineno
+        for s in statements
+        if isinstance(s, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
+    for table in nested_tables(symtable.symtable(source, filename, "exec"), def_lines):
+        line = table.get_lineno()
+        owners = next((o for a, b, o in spans if a <= line <= b), [MODULE_CODE])
+        referenced = {
+            s.get_name()
+            for s in table.get_symbols()
+            if s.is_global() and s.is_referenced()
+        }
+        for owner in owners:
+            reads.setdefault(owner, set()).update(referenced)
+
+    if not reads.get(MODULE_CODE):  # e.g. just a docstring
+        reads.pop(MODULE_CODE, None)
+    for owner, names in reads.items():
+        graph.edges.setdefault(f"{module}:{owner}", set()).update(
+            f"{module}:{name}"
+            for name in names
+            if name in definitions or name in imports or name not in BUILTIN_NAMES
+        )
+    for name, targets in imports.items():
+        graph.edges.setdefault(f"{module}:{name}", set()).update(targets)
+        if name not in definitions:
+            graph.aliases.add(f"{module}:{name}")
+    graph.edges[module] = {f"{module}:{name}" for name in [*reads, *imports]}
+
+
+def flatten_statements(body: list[ast.stmt]) -> Iterator[ast.stmt | ast.expr]:
+    """Yield top-level statements, looking inside `if` and `try` blocks.
+
+    Conditions and exception types are yielded as expressions; they belong to the
+    module's top-level code.
     """
-    resources = []
-    with open(file, "r") as f:
-        for line in f:
-            if line.startswith("def "):
-                ## extract used function code
-                ...
-            elif line.startswith("class "):
-                ## extract used class code
-                ...
-            elif
+    # ponytail: for/while/with/match blocks are kept whole as top-level code, so defs
+    # inside them aren't symbols. Flatten them here too if that ever matters.
+    for stmt in body:
+        match stmt:
+            case ast.If():
+                yield stmt.test
+                yield from flatten_statements(stmt.body)
+                yield from flatten_statements(stmt.orelse)
+            case ast.Try() | ast.TryStar():
+                yield from flatten_statements(stmt.body)
+                for handler in stmt.handlers:
+                    if handler.type:
+                        yield handler.type
+                    yield from flatten_statements(handler.body)
+                yield from flatten_statements(stmt.orelse)
+                yield from flatten_statements(stmt.finalbody)
+            case _:
+                yield stmt
+
+
+def statement_owners(stmt: ast.stmt | ast.expr) -> list[str]:
+    """Return the module-level names a statement defines, or `<module>` if none."""
+    match stmt:
+        case ast.FunctionDef() | ast.AsyncFunctionDef() | ast.ClassDef():
+            return [stmt.name]
+        case ast.TypeAlias(name=ast.Name(id=name)):
+            return [name]
+        case ast.Assign() | ast.AnnAssign() | ast.AugAssign():
+            targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+            names = [
+                node.id
+                for target in targets
+                for node in unpack_target(target)
+                if isinstance(node, ast.Name)
+            ]
+            return names or [MODULE_CODE]
+    return [MODULE_CODE]
+
+
+def unpack_target(target: ast.expr) -> Iterator[ast.expr]:
+    """Yield the individual targets of a possibly nested tuple/list assignment."""
+    match target:
+        case ast.Tuple(elts=elts) | ast.List(elts=elts):
+            for elt in elts:
+                yield from unpack_target(elt)
+        case ast.Starred(value=value):
+            yield from unpack_target(value)
+        case _:
+            yield target
+
+
+def import_bindings(stmt: ast.Import | ast.ImportFrom) -> Iterator[tuple[str, str]]:
+    """Yield `(bound name, target node id)` for each name an import binds."""
+    for alias in stmt.names:
+        if isinstance(stmt, ast.Import):
+            if alias.asname:
+                yield alias.asname, alias.name
+            else:
+                yield alias.name.split(".")[0], alias.name.split(".")[0]
+        elif alias.name != "*":
+            yield alias.asname or alias.name, "." * stmt.level + (stmt.module or "")
+
+
+def module_reads(node: ast.AST) -> set[str]:
+    """Return names that `node` reads in module scope, skipping nested scopes.
+
+    Bodies of functions, classes and lambdas are left to `symtable`.
+    """
+    match node:
+        case ast.Name(ctx=ast.Load()):
+            return {node.id}
+        case ast.FunctionDef() | ast.AsyncFunctionDef() | ast.Lambda():
+            # Annotations live in their own annotation scope, so symtable has them.
+            args = node.args
+            parts: list[ast.AST] = [
+                *getattr(node, "decorator_list", []),
+                *args.defaults,
+                *(d for d in args.kw_defaults if d),
+            ]
+        case ast.ClassDef():
+            parts = [*node.decorator_list, *node.bases, *node.keywords]
+        case ast.TypeAlias():
+            return set()
+        case ast.ListComp() | ast.SetComp() | ast.GeneratorExp() | ast.DictComp():
+            return comprehension_reads(node)
+        case _:
+            parts = list(ast.iter_child_nodes(node))
+    reads = set().union(*map(module_reads, parts))
+    return reads - {param.name for param in getattr(node, "type_params", [])}
+
+
+def comprehension_reads(
+    node: ast.ListComp | ast.SetComp | ast.GeneratorExp | ast.DictComp,
+) -> set[str]:
+    """Return names a comprehension reads, minus its own loop variables."""
+    first, *rest = node.generators
+    elts = [node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]
+    inner: list[ast.AST] = [*elts, *first.ifs]
+    for gen in rest:
+        inner += [gen.iter, *gen.ifs]
+    bound = {
+        name.id
+        for gen in node.generators
+        for name in ast.walk(gen.target)
+        if isinstance(name, ast.Name)
+    }
+    return module_reads(first.iter) | (set().union(*map(module_reads, inner)) - bound)
+
+
+def nested_tables(
+    module_table: symtable.SymbolTable, def_lines: set[int]
+) -> Iterator[symtable.SymbolTable]:
+    """Yield every scope nested in the module, except the module's own annotations.
+
+    Module-level variable annotations share one table, so they are read with `ast`
+    instead. A function's annotation table sits on its `def` line.
+    """
+    for child in module_table.get_children():
+        is_module_annotations = (
+            child.get_type() == symtable.SymbolTableType.ANNOTATION
+            and child.get_lineno() not in def_lines
+        )
+        if not is_module_annotations:
+            yield from walk_tables(child)
+
+
+def walk_tables(table: symtable.SymbolTable) -> Iterator[symtable.SymbolTable]:
+    """Yield `table` and all tables nested inside it."""
+    yield table
+    for child in table.get_children():
+        yield from walk_tables(child)
+
+
+def resolve(graph: DependencyGraph, node: str) -> set[str]:
+    """Follow import aliases from `node` to the nodes they point at."""
+    if node not in graph.aliases:
+        return {node}
+    return set().union(*(resolve(graph, t) for t in graph.edges[node]))
+
+
+def direct_dependencies(graph: DependencyGraph, node: str) -> set[str]:
+    """Return the nodes `node` uses directly, with import aliases resolved."""
+    return set().union(*(resolve(graph, dep) for dep in graph.edges.get(node, ())))
+
+
+def classify(graph: DependencyGraph, node: str) -> Category:
+    """Return which group a dependency node belongs to."""
+    if node in graph.edges:
+        return "project"
+    if ":" in node:
+        return "unresolved"
+    if node.split(".")[0] in sys.stdlib_module_names:
+        return "stdlib"
+    return "third-party"
+
+
+def format_dependencies(graph: DependencyGraph, title: str, deps: set[str]) -> str:
+    """Render one target's dependencies: main list first, then unresolved and stdlib."""
+    groups: dict[Category, list[str]] = {
+        "project": [],
+        "third-party": [],
+        "unresolved": [],
+        "stdlib": [],
+    }
+    for dep in sorted(deps):
+        groups[classify(graph, dep)].append(dep)
+    lines = [title]
+    lines += [f"    {dep}" for dep in groups["project"] + groups["third-party"]]
+    for label in ("unresolved", "stdlib"):
+        if groups[label]:
+            lines.append(f"    {label}: {', '.join(groups[label])}")
+    return "\n".join(lines) + "\n"
+
+
+def symbols_of(graph: DependencyGraph, module: str) -> list[str]:
+    """Return the sorted non-alias symbol ids defined in `module`."""
+    return sorted(
+        node
+        for node in graph.edges[module]
+        if node in graph.edges and node not in graph.aliases
+    )

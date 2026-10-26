@@ -10,11 +10,11 @@ Verification commands used throughout:
 Needs explicit user approval first (global rule: no new deps without asking).
 
 **Acceptance criteria:**
-- [ ] `uv add --dev pytest ruff` done, `uv.lock` committed
-- [ ] `uv run pytest` and `uv run ruff check` both run (0 tests is fine)
+- [x] `uv add --dev pytest ruff` done, `uv.lock` committed
+- [x] `uv run pytest` and `uv run ruff check` both run (0 tests is fine)
 
 **Verification:**
-- [ ] `uv sync` from clean works
+- [x] `uv sync` from clean works
 
 **Dependencies:** None (approval)
 **Files likely touched:** `pyproject.toml`, `uv.lock`
@@ -31,13 +31,13 @@ symbol with its *direct* deps. Add a pseudo-symbol `<module>` for top-level stat
 defs or assignments. This replaces the line-based draft `find_resources` in `logic.py` (approved).
 
 **Acceptance criteria:**
-- [ ] A local variable or parameter that shadows a global is not reported as a dep
-- [ ] Decorator, base class, default value and annotation references are reported
-- [ ] `import os` / `import numpy as np` usages show up as `os` (stdlib) / `numpy` (third-party)
+- [x] A local variable or parameter that shadows a global is not reported as a dep
+- [x] Decorator, base class, default value and annotation references are reported
+- [x] `import os` / `import numpy as np` usages show up as `os` (stdlib) / `numpy` (third-party)
 
 **Verification:**
-- [ ] `uv run pytest`: fixture file covering shadowing, decorators, annotations, imports
-- [ ] Manual: `uv run pydep src/pydep/logic.py` prints sensible output on itself
+- [x] `uv run pytest`: fixture file covering shadowing, decorators, annotations, imports
+- [x] Manual: `uv run pydep src/pydep/logic.py` prints sensible output on itself
 
 **Dependencies:** Task 0
 **Files likely touched:** `src/pydep/logic.py`, `src/pydep/__init__.py`, `tests/test_logic.py`
