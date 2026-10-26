@@ -8,7 +8,6 @@ from pydep.logic import (
     collect_dependencies,
     find_path,
     format_dependencies,
-    modules_of,
     render_tree,
     reverse_dependencies,
     symbols_of,
@@ -58,7 +57,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.target:
         targets = [args.target]
     else:
-        targets = [t for m in modules_of(graph) for t in [m, *symbols_of(graph, m)]]
+        modules = sorted(m for m in graph.edges if ":" not in m)
+        targets = [t for m in modules for t in [m, *symbols_of(graph, m)]]
     for target in targets:
         if args.tree:
             print(render_tree(graph, target))

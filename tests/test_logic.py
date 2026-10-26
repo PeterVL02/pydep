@@ -12,7 +12,6 @@ from pydep.logic import (
     collect_dependencies,
     direct_dependencies,
     find_path,
-    modules_of,
     render_tree,
     reverse_dependencies,
 )
@@ -218,7 +217,7 @@ def test_importing_a_missing_name_is_unresolved(tmp_path: Path) -> None:
 def test_root_that_is_itself_a_package_keeps_the_package_name(tmp_path: Path) -> None:
     """Pointing at the package directory gives the same module names as its parent."""
     graph = build_graph(write_package(tmp_path, PACKAGE) / "pkg")
-    assert "pkg.a" in modules_of(graph)
+    assert "pkg.a" in graph.edges
 
 
 def test_files_with_syntax_errors_are_skipped_with_a_warning(
@@ -227,7 +226,7 @@ def test_files_with_syntax_errors_are_skipped_with_a_warning(
     """One broken file doesn't stop the analysis of the rest."""
     files = PACKAGE | {"pkg/broken.py": "def (:\n"}
     graph = build_graph(write_package(tmp_path, files))
-    assert "pkg.a" in modules_of(graph)
+    assert "pkg.a" in graph.edges
     assert "broken.py" in capsys.readouterr().err
 
 

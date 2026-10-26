@@ -12,7 +12,7 @@ import ast
 import builtins
 import symtable
 import sys
-from collections import Counter, deque
+from collections import Counter, defaultdict, deque
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -249,23 +249,11 @@ def statement_owners(stmt: ast.stmt | ast.expr) -> list[str]:
             names = [
                 node.id
                 for target in targets
-                for node in unpack_target(target)
-                if isinstance(node, ast.Name)
+                for node in ast.walk(target)
+                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
             ]
             return names or [MODULE_CODE]
     return [MODULE_CODE]
-
-
-def unpack_target(target: ast.expr) -> Iterator[ast.expr]:
-    """Yield the individual targets of a possibly nested tuple/list assignment."""
-    match target:
-        case ast.Tuple(elts=elts) | ast.List(elts=elts):
-            for elt in elts:
-                yield from unpack_target(elt)
-        case ast.Starred(value=value):
-            yield from unpack_target(value)
-        case _:
-            yield target
 
 
 def import_bindings(
@@ -616,11 +604,6 @@ def reverse_dependencies(graph: DependencyGraph, target: str) -> set[str]:
     return {node for node in seen - own if ":" in node and node != target}
 
 
-def modules_of(graph: DependencyGraph) -> list[str]:
-    """Return the sorted names of all analysed project modules."""
-    return sorted(node for node in graph.edges if ":" not in node)
-
-
 def classify(graph: DependencyGraph, node: str) -> Category:
     """Return which group a dependency node belongs to."""
     if node in graph.edges:
@@ -634,12 +617,7 @@ def classify(graph: DependencyGraph, node: str) -> Category:
 
 def format_dependencies(graph: DependencyGraph, title: str, deps: set[str]) -> str:
     """Render one target's dependencies: main list first, then unresolved and stdlib."""
-    groups: dict[Category, list[str]] = {
-        "project": [],
-        "third-party": [],
-        "unresolved": [],
-        "stdlib": [],
-    }
+    groups: defaultdict[Category, list[str]] = defaultdict(list)
     for dep in sorted(deps):
         groups[classify(graph, dep)].append(dep)
     lines = [title]
