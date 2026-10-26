@@ -114,6 +114,17 @@ def analyze_module(
                 }
         definitions.update(statement_owners(stmt))
     definitions.discard(MODULE_CODE)
+    # `from .a import x` in pkg/__init__.py also binds `a` in pkg as a side effect.
+    # It resolves names but isn't part of what the module itself depends on.
+    side_effect_names: set[str] = set()
+    for stmt in statements if is_package else []:
+        if isinstance(stmt, ast.ImportFrom):
+            imported = absolute_module(package, stmt.level, stmt.module)
+            child = imported.removeprefix(f"{module}.").split(".")[0]
+            bound = child in imports or child in definitions
+            if imported.startswith(f"{module}.") and not bound:
+                imports[child] = {f"{module}.{child}"}
+                side_effect_names.add(child)
     if stars := imports.pop("*", set()):
         graph.star_imports[module] = stars
     # Names bound to exactly one project module, so `name.attr` can be resolved.
@@ -124,7 +135,7 @@ def analyze_module(
     }
 
     reads: dict[str, set[str]] = {}
-    attribute_targets: dict[str, set[str]] = {}
+    direct_targets: dict[str, set[str]] = {}  # node ids, not names
     bare_aliases: dict[str, set[str]] = {}
     spans: list[tuple[int, int, list[str]]] = []
     for stmt in statements:
@@ -132,9 +143,16 @@ def analyze_module(
             continue
         owners = statement_owners(stmt)
         targets, bare = module_attribute_reads(stmt, module_aliases, local_modules)
+        targets |= {  # imports inside functions and classes
+            target
+            for node in ast.walk(stmt)
+            if isinstance(node, ast.Import | ast.ImportFrom)
+            for _, target in import_bindings(node, package, local_modules)
+        }
+        names = module_reads(stmt) | annotation_reads(stmt)
         for owner in owners:
-            reads.setdefault(owner, set()).update(module_reads(stmt))
-            attribute_targets.setdefault(owner, set()).update(targets)
+            reads.setdefault(owner, set()).update(names)
+            direct_targets.setdefault(owner, set()).update(targets)
             bare_aliases.setdefault(owner, set()).update(bare)
         start = min(
             [stmt.lineno, *(d.lineno for d in getattr(stmt, "decorator_list", []))]
@@ -146,33 +164,51 @@ def analyze_module(
         for s in statements
         if isinstance(s, ast.FunctionDef | ast.AsyncFunctionDef)
     }
-    for table in nested_tables(symtable.symtable(source, filename, "exec"), def_lines):
+    module_table = symtable.symtable(source, filename, "exec")
+    # Globals bound by something other than a definition or import: loop and `with`
+    # variables in top-level code, or `global x; x = ...` inside a function.
+    bound_by: dict[str, set[str]] = {
+        s.get_name(): {MODULE_CODE}
+        for s in module_table.get_symbols()
+        if s.is_assigned() and s.get_name() not in definitions | imports.keys()
+    }
+    for table, class_names in nested_tables(module_table, def_lines):
         line = table.get_lineno()
         owners = next((o for a, b, o in spans if a <= line <= b), [MODULE_CODE])
-        referenced = {
-            s.get_name()
-            for s in table.get_symbols()
-            if s.is_global() and s.is_referenced()
-        }
-        for owner in owners:
-            reads.setdefault(owner, set()).update(referenced)
+        for s in table.get_symbols():
+            if s.is_global() and s.is_referenced() and s.get_name() not in class_names:
+                for owner in owners:
+                    reads.setdefault(owner, set()).add(s.get_name())
+            if s.is_declared_global() and s.is_assigned():
+                bound_by.setdefault(s.get_name(), set()).update(owners)
 
-    if not reads.get(MODULE_CODE):  # e.g. just a docstring
-        reads.pop(MODULE_CODE, None)
+    if not reads.get(MODULE_CODE) and not any(
+        MODULE_CODE in o for o in bound_by.values()
+    ):
+        reads.pop(MODULE_CODE, None)  # e.g. just a docstring
+    known = definitions | imports.keys() | bound_by.keys()
     for owner, names in reads.items():
         # A module alias only used as `alias.attr` is replaced by those attributes.
         names -= module_aliases.keys() - bare_aliases.get(owner, set())
         graph.edges.setdefault(f"{module}:{owner}", set()).update(
             f"{module}:{name}"
             for name in names
-            if name in definitions or name in imports or name not in BUILTIN_NAMES
+            if name in known or name not in BUILTIN_NAMES
         )
-        graph.edges[f"{module}:{owner}"].update(attribute_targets.get(owner, set()))
+        graph.edges[f"{module}:{owner}"].update(direct_targets.get(owner, set()))
+    for name, owners in bound_by.items():
+        if name not in definitions and name not in imports:
+            graph.edges[f"{module}:{name}"] = {f"{module}:{o}" for o in owners}
+            graph.aliases.add(f"{module}:{name}")
     for name, targets in imports.items():
         graph.edges.setdefault(f"{module}:{name}", set()).update(targets)
         if name not in definitions:
             graph.aliases.add(f"{module}:{name}")
-    graph.edges[module] = {f"{module}:{name}" for name in [*reads, *imports]}
+    graph.edges[module] = {
+        f"{module}:{name}"
+        for name in [*reads, *imports]
+        if name not in side_effect_names
+    }
 
 
 def flatten_statements(body: list[ast.stmt]) -> Iterator[ast.stmt | ast.expr]:
@@ -277,8 +313,8 @@ def module_attribute_reads(
     Returns the node ids the chains point at, and the aliases `stmt` also uses
     bare (not as the start of a chain), which then depend on the whole module.
     """
-    # ponytail: walks nested function bodies without scope info, so a local that
-    # shadows a module alias is treated as the module. Rare in practice.
+    shadowed = names_bound_inside(stmt)
+    module_aliases = {k: v for k, v in module_aliases.items() if k not in shadowed}
     targets: set[str] = set()
     chained: Counter[str] = Counter()
     inner: set[int] = set()
@@ -295,11 +331,14 @@ def module_attribute_reads(
             chained[current.id] += 1
             resolved = module_aliases[current.id]
             for attr in reversed(attrs):
+                if attr in BUILTIN_NAMES and attr.startswith("__"):  # e.g. __file__
+                    break
                 if f"{resolved}.{attr}" not in local_modules:
-                    resolved = f"{resolved}:{attr}"
+                    targets.add(f"{resolved}:{attr}")
                     break
                 resolved = f"{resolved}.{attr}"
-            targets.add(resolved)
+            else:
+                targets.add(resolved)
     loads = Counter(
         node.id
         for node in ast.walk(stmt)
@@ -379,6 +418,71 @@ def module_reads(node: ast.AST) -> set[str]:
     return reads - {param.name for param in getattr(node, "type_params", [])}
 
 
+def annotation_reads(stmt: ast.stmt | ast.expr) -> set[str]:
+    """Return the names used in type annotations anywhere inside `stmt`.
+
+    Covers what symtable misses: annotations under `from __future__ import
+    annotations`, annotations on local variables, and string forward references.
+    """
+    annotations: list[ast.expr] = []
+    for node in ast.walk(stmt):
+        match node:
+            case ast.arg(annotation=ast.expr() as annotation):
+                annotations.append(annotation)
+            case ast.AnnAssign(annotation=annotation):
+                annotations.append(annotation)
+            case (
+                ast.FunctionDef(returns=ast.expr() as annotation)
+                | ast.AsyncFunctionDef(returns=ast.expr() as annotation)
+            ):
+                annotations.append(annotation)
+    return set().union(*map(annotation_names, annotations)) - names_bound_inside(stmt)
+
+
+def names_bound_inside(stmt: ast.stmt | ast.expr) -> set[str]:
+    """Return names bound anywhere inside `stmt`, plus its type parameters.
+
+    Used where there is no scope info: such names are treated as local to `stmt`.
+    """
+    # ponytail: treats a name bound in one method as local to the whole class, so a
+    # global with the same name used elsewhere in that class is missed here.
+    names: set[str] = set()
+    for node in ast.walk(stmt):
+        names |= {param.name for param in getattr(node, "type_params", [])}
+        if node is stmt:
+            continue
+        match node:
+            case (
+                ast.FunctionDef(name=name)
+                | ast.AsyncFunctionDef(name=name)
+                | ast.ClassDef(name=name)
+                | ast.arg(arg=name)
+                | ast.Name(id=name, ctx=ast.Store())
+            ):
+                names.add(name)
+            case ast.alias(name=name, asname=asname):
+                names.add(asname or name.split(".")[0])
+    return names
+
+
+def annotation_names(node: ast.expr) -> set[str]:
+    """Return the names in one annotation, parsing string forward references."""
+    match node:
+        case ast.Name(id=name):
+            return {name}
+        case ast.Constant(value=str() as text):
+            try:
+                return annotation_names(ast.parse(text, mode="eval").body)
+            except SyntaxError:
+                return set()
+        case ast.Subscript(
+            value=ast.Name(id="Literal") | ast.Attribute(attr="Literal")
+        ):
+            return annotation_names(node.value)  # Literal["x"] holds values, not names
+    children = (n for n in ast.iter_child_nodes(node) if isinstance(n, ast.expr))
+    return set().union(*map(annotation_names, children))
+
+
 def comprehension_reads(
     node: ast.ListComp | ast.SetComp | ast.GeneratorExp | ast.DictComp,
 ) -> set[str]:
@@ -399,7 +503,7 @@ def comprehension_reads(
 
 def nested_tables(
     module_table: symtable.SymbolTable, def_lines: set[int]
-) -> Iterator[symtable.SymbolTable]:
+) -> Iterator[tuple[symtable.SymbolTable, frozenset[str]]]:
     """Yield every scope nested in the module, except the module's own annotations.
 
     Module-level variable annotations share one table, so they are read with `ast`
@@ -414,11 +518,25 @@ def nested_tables(
             yield from walk_tables(child)
 
 
-def walk_tables(table: symtable.SymbolTable) -> Iterator[symtable.SymbolTable]:
-    """Yield `table` and all tables nested inside it."""
-    yield table
+def walk_tables(
+    table: symtable.SymbolTable, class_names: frozenset[str] = frozenset()
+) -> Iterator[tuple[symtable.SymbolTable, frozenset[str]]]:
+    """Yield `table` and all tables nested inside it.
+
+    Each comes with the class-body names it can see: annotation scopes directly in a
+    class body look names up in the class first, though symtable calls them global.
+    """
+    yield table, class_names
     for child in table.get_children():
-        yield from walk_tables(child)
+        visible: frozenset[str] = frozenset()
+        if (
+            table.get_type() == symtable.SymbolTableType.CLASS
+            and child.get_type() == symtable.SymbolTableType.ANNOTATION
+        ):
+            visible = frozenset(
+                s.get_name() for s in table.get_symbols() if s.is_local()
+            )
+        yield from walk_tables(child, visible)
 
 
 def resolve(

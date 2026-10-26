@@ -418,3 +418,151 @@ def test_cli_rdeps_accepts_an_external_target(
     assert capsys.readouterr().out == (
         "numpy is used by\n    m:<module>\n    m:a\n    m:b\n    m:c\n\n"
     )
+
+
+def test_module_dunder_attribute_is_not_a_symbol(tmp_path: Path) -> None:
+    """`pkg.__file__` doesn't depend on a symbol called `__file__`."""
+    files = {"pkg/__init__.py": "", "pkg/m.py": "import pkg\nHERE = pkg.__file__\n"}
+    graph = build_graph(write_package(tmp_path, files))
+    assert collect_dependencies(graph, "pkg.m:HERE") == set()
+
+
+def test_name_bound_by_top_level_loop_comes_from_module_code(tmp_path: Path) -> None:
+    """A loop variable at module level is a global set by the module's own code."""
+    graph = graph_of(tmp_path, "for c in 'ab':\n    pass\ndef f():\n    return c\n")
+    assert collect_dependencies(graph, "m:f") == {"m:<module>"}
+
+
+def test_global_assigned_inside_a_function_comes_from_that_function(
+    tmp_path: Path,
+) -> None:
+    """`global CACHE; CACHE = {}` in setup() makes setup the source of CACHE."""
+    graph = graph_of(
+        tmp_path,
+        "def setup():\n    global CACHE\n    CACHE = {}\n"
+        "def use():\n    return CACHE\n",
+    )
+    assert collect_dependencies(graph, "m:use") == {"m:setup"}
+
+
+def test_annotations_count_under_future_annotations(tmp_path: Path) -> None:
+    """`from __future__ import annotations` doesn't hide annotation dependencies."""
+    graph = graph_of(
+        tmp_path,
+        "from __future__ import annotations\n"
+        "class Hint: ...\n"
+        "class C:\n    def m(self) -> Hint: ...\n",
+    )
+    assert collect_dependencies(graph, "m:C") == {"m:Hint"}
+
+
+def test_string_forward_reference_is_a_dependency(tmp_path: Path) -> None:
+    """`-> "Hint"` depends on Hint."""
+    graph = graph_of(tmp_path, "class Hint: ...\ndef f() -> 'Hint': ...\n")
+    assert collect_dependencies(graph, "m:f") == {"m:Hint"}
+
+
+def test_literal_strings_are_not_forward_references(tmp_path: Path) -> None:
+    """`Literal["fast"]` doesn't depend on a name called fast."""
+    graph = graph_of(
+        tmp_path,
+        "from typing import Literal\ndef f(mode: Literal['fast']) -> None: ...\n",
+    )
+    assert collect_dependencies(graph, "m:f") == {"typing"}
+
+
+def test_local_variable_annotation_is_a_dependency(tmp_path: Path) -> None:
+    """An annotation on a local variable counts, though Python never evaluates it."""
+    graph = graph_of(
+        tmp_path, "class Hint: ...\ndef f():\n    y: Hint = 1\n    return y\n"
+    )
+    assert collect_dependencies(graph, "m:f") == {"m:Hint"}
+
+
+def test_annotation_naming_a_nested_class_is_not_a_global(tmp_path: Path) -> None:
+    """Under future annotations, a nested class used in a method hint is local."""
+    graph = graph_of(
+        tmp_path,
+        "from __future__ import annotations\n"
+        "class Config:\n"
+        "    class Params: ...\n"
+        "    def get(self) -> Params: ...\n",
+    )
+    assert collect_dependencies(graph, "m:Config") == set()
+
+
+def test_evaluated_annotation_naming_a_nested_class_is_not_a_global(
+    tmp_path: Path,
+) -> None:
+    """Without future annotations, a class's annotation scopes see its names too."""
+    graph = graph_of(
+        tmp_path,
+        "class Config:\n    class Params: ...\n    def get(self) -> Params: ...\n",
+    )
+    assert collect_dependencies(graph, "m:Config") == set()
+
+
+def test_annotation_naming_a_function_local_import_is_not_a_global(
+    tmp_path: Path,
+) -> None:
+    """A locally imported type in a local hint isn't a global; the import is a dep."""
+    graph = graph_of(
+        tmp_path,
+        "def f():\n    from os import PathLike\n    p: PathLike = None\n    return p\n",
+    )
+    assert collect_dependencies(graph, "m:f") == {"os"}
+
+
+def test_import_inside_a_function_is_a_dependency(tmp_path: Path) -> None:
+    """Lazy imports inside a function count as that function's dependencies."""
+    files = {
+        "pkg/__init__.py": "",
+        "pkg/a.py": "def helper():\n    return 1\n",
+        "pkg/b.py": "def f():\n    from pkg.a import helper\n    return helper()\n",
+    }
+    graph = build_graph(write_package(tmp_path, files))
+    assert collect_dependencies(graph, "pkg.b:f") == {"pkg.a:helper"}
+
+
+def test_package_init_import_from_submodule_binds_the_submodule_name(
+    tmp_path: Path,
+) -> None:
+    """After `from .a import *` in pkg/__init__.py, the name `a` is pkg.a."""
+    files = {
+        "pkg/__init__.py": "from .a import *\nALL = a.__all__\n",
+        "pkg/a.py": "__all__ = ['f']\ndef f(): ...\n",
+    }
+    graph = build_graph(write_package(tmp_path, files))
+    assert collect_dependencies(graph, "pkg:ALL") == {"pkg.a:__all__"}
+
+
+def test_local_variable_shadowing_a_module_alias_is_not_an_attribute_chain(
+    tmp_path: Path,
+) -> None:
+    """`errors = []; errors.append(1)` doesn't depend on pkg.errors:append."""
+    files = {
+        "pkg/__init__.py": "",
+        "pkg/errors.py": "class Boom(Exception): ...\n",
+        "pkg/b.py": (
+            "from pkg import errors\n"
+            "class C:\n"
+            "    def run(self):\n"
+            "        errors = []\n"
+            "        errors.append(1)\n"
+            "        return errors\n"
+        ),
+    }
+    graph = build_graph(write_package(tmp_path, files))
+    assert collect_dependencies(graph, "pkg.b:C") == set()
+
+
+def test_function_in_package_init_that_imports_a_submodule_keeps_its_deps(
+    tmp_path: Path,
+) -> None:
+    """Functions in pkg/__init__.py are analysed like any other module's."""
+    files = {
+        "pkg/__init__.py": "from .a import f\ndef g():\n    return f()\n",
+        "pkg/a.py": "def f(): ...\n",
+    }
+    graph = build_graph(write_package(tmp_path, files))
+    assert collect_dependencies(graph, "pkg:g") == {"pkg.a:f"}

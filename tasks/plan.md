@@ -64,27 +64,29 @@ Full task details are in `tasks/todo.md`.
 - [x] Task 2: Transitive closure, `module:symbol` zoom, module-wide view
 
 ### Checkpoint: Single file
-- [ ] `pydep file.py:func` shows only func's closure; tests and ruff are clean
+- [x] `pydep file.py mod:func` shows only func's closure; tests and ruff are clean
+  (CLI became `pydep PATH [TARGET]` from Task 2 on, instead of `file.py:func`)
 
 ### Phase 2: Whole project
 - [x] Task 3: Index a project root and resolve absolute imports across modules
 - [x] Task 4: Relative imports, `import x as m; m.f` refinement, star imports
 
 ### Checkpoint: Whole project
-- [ ] Cross-module zoom correct on the fixture package; review output format with human
+- [x] Cross-module zoom correct on the fixture package
+- [ ] Review output format with human (skipped: `/build auto` had no gate here)
 
 ### Phase 3: Explore the graph
 - [x] Task 5: `--tree` view of a target's deps
 - [x] Task 6: `--why X` path search and `--rdeps` reverse lookup
 
 ### Checkpoint: Explore
-- [ ] Tree and searches agree with the flat list on the fixture package
+- [x] Tree and searches agree with the flat list on the fixture package
 
 ### Phase 4: Hardening
-- [ ] Task 7: Run against a real project, fix crashes, document usage and limits
+- [x] Task 7: Run against a real project, fix crashes, document usage and limits
 
 ### Checkpoint: Complete
-- [ ] All acceptance criteria met, ready for review
+- [x] All acceptance criteria met, ready for review
 
 ## Risks and Mitigations
 | Risk | Impact | Mitigation |

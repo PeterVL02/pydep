@@ -170,13 +170,13 @@ or another local repo. Fix crashes and wrong resolutions found there (add a regr
 each). Write README usage and known limits (untyped attribute calls, dynamic imports).
 
 **Acceptance criteria:**
-- [ ] Runs to completion on a real project with no tracebacks
-- [ ] Every bug found has a regression test
-- [ ] README documents the CLI and its limits
+- [x] Runs to completion on a real project with no tracebacks
+- [x] Every bug found has a regression test
+- [x] README documents the CLI and its limits
 
 **Verification:**
-- [ ] `uv run pytest`, `uv run ruff check`, `uv run ruff format`
-- [ ] Manual: spot-check 3 symbols' output against reading the source
+- [x] `uv run pytest`, `uv run ruff check`, `uv run ruff format`
+- [x] Manual: spot-check 3 symbols' output against reading the source
 
 **Dependencies:** Tasks 5, 6
 **Files likely touched:** `src/pydep/logic.py`, `tests/test_logic.py`, `README.md`
@@ -185,5 +185,5 @@ each). Write README usage and known limits (untyped attribute calls, dynamic imp
 ---
 
 ## Checkpoint: Complete
-- [ ] All acceptance criteria met
-- [ ] Ready for review
+- [x] All acceptance criteria met
+- [x] Ready for review
