@@ -226,3 +226,95 @@ def test_files_with_syntax_errors_are_skipped_with_a_warning(
     graph = build_graph(write_package(tmp_path, files))
     assert "pkg.a" in modules_of(graph)
     assert "broken.py" in capsys.readouterr().err
+
+
+IMPORT_STYLES = {
+    "pkg/__init__.py": "from .a import f\n",
+    "pkg/a.py": ("LIMIT = 1\ndef f():\n    return LIMIT\ndef other():\n    return 2\n"),
+    "pkg/sub/__init__.py": "",
+    "pkg/sub/d.py": "def helper():\n    return 1\n",
+    "pkg/sub/c.py": (
+        "from ..a import f\n"
+        "from . import d\n"
+        "import pkg.a as m\n"
+        "import pkg\n"
+        "from pkg.a import *\n"
+        "from os.path import *\n"
+        "def uses_relative():\n    return f()\n"
+        "def uses_sibling_module():\n    return d.helper()\n"
+        "def uses_attribute():\n    return m.other()\n"
+        "def uses_dotted():\n    return pkg.a.other()\n"
+        "def uses_module_value():\n    return m\n"
+        "def uses_star():\n    return other()\n"
+        "def uses_external_star():\n    return join('a')\n"
+    ),
+}
+
+
+def test_relative_import_from_init_resolves(tmp_path: Path) -> None:
+    """`from .a import f` inside pkg/__init__.py points at pkg.a."""
+    graph = build_graph(write_package(tmp_path, IMPORT_STYLES))
+    assert collect_dependencies(graph, "pkg") == {"pkg.a:f", "pkg.a:LIMIT"}
+
+
+def test_relative_import_two_levels_up_resolves(tmp_path: Path) -> None:
+    """`from ..a import f` inside pkg/sub/c.py points at pkg.a."""
+    graph = build_graph(write_package(tmp_path, IMPORT_STYLES))
+    deps = collect_dependencies(graph, "pkg.sub.c:uses_relative")
+    assert deps == {"pkg.a:f", "pkg.a:LIMIT"}
+
+
+def test_attribute_on_relatively_imported_module_resolves(tmp_path: Path) -> None:
+    """`from . import d; d.helper()` depends on pkg.sub.d:helper only."""
+    graph = build_graph(write_package(tmp_path, IMPORT_STYLES))
+    deps = collect_dependencies(graph, "pkg.sub.c:uses_sibling_module")
+    assert deps == {"pkg.sub.d:helper"}
+
+
+def test_attribute_on_module_alias_depends_on_that_symbol_only(tmp_path: Path) -> None:
+    """`import pkg.a as m; m.other()` depends on pkg.a:other, not all of pkg.a."""
+    graph = build_graph(write_package(tmp_path, IMPORT_STYLES))
+    assert collect_dependencies(graph, "pkg.sub.c:uses_attribute") == {"pkg.a:other"}
+
+
+def test_dotted_attribute_chain_resolves_through_packages(tmp_path: Path) -> None:
+    """`import pkg; pkg.a.other()` depends on pkg.a:other."""
+    graph = build_graph(write_package(tmp_path, IMPORT_STYLES))
+    assert collect_dependencies(graph, "pkg.sub.c:uses_dotted") == {"pkg.a:other"}
+
+
+def test_module_used_as_a_value_depends_on_the_whole_module(tmp_path: Path) -> None:
+    """Passing a module around may use any of it."""
+    graph = build_graph(write_package(tmp_path, IMPORT_STYLES))
+    deps = collect_dependencies(graph, "pkg.sub.c:uses_module_value")
+    assert deps == {"pkg.a", "pkg.a:f", "pkg.a:LIMIT", "pkg.a:other"}
+
+
+def test_star_import_from_project_module_resolves_names(tmp_path: Path) -> None:
+    """A name from `from pkg.a import *` resolves to its definition in pkg.a."""
+    graph = build_graph(write_package(tmp_path, IMPORT_STYLES))
+    assert collect_dependencies(graph, "pkg.sub.c:uses_star") == {"pkg.a:other"}
+
+
+def test_star_import_from_external_module_falls_back_to_that_module(
+    tmp_path: Path,
+) -> None:
+    """A name that could come from `from os.path import *` depends on os.path."""
+    graph = build_graph(write_package(tmp_path, IMPORT_STYLES))
+    assert collect_dependencies(graph, "pkg.sub.c:uses_external_star") == {"os.path"}
+
+
+def test_star_import_honours_literal_dunder_all(tmp_path: Path) -> None:
+    """Names left out of `__all__` are not star-imported."""
+    files = {
+        "pkg/__init__.py": "",
+        "pkg/e.py": "__all__ = ['pub']\ndef pub(): ...\ndef hidden(): ...\n",
+        "pkg/f.py": (
+            "from pkg.e import *\n"
+            "def g():\n    return pub()\n"
+            "def h():\n    return hidden()\n"
+        ),
+    }
+    graph = build_graph(write_package(tmp_path, files))
+    assert collect_dependencies(graph, "pkg.f:g") == {"pkg.e:pub"}
+    assert collect_dependencies(graph, "pkg.f:h") == {"pkg.f:hidden"}

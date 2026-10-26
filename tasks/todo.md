@@ -101,12 +101,12 @@ package. Refine `import pkg.a as m; m.f()` (and `import pkg.a; pkg.a.f()`) to `p
 `from pkg.a import *` binds `pkg.a`'s public names (honouring `__all__` when it's a literal list).
 
 **Acceptance criteria:**
-- [ ] Relative imports at depth 1 and 2 resolve correctly, including from inside `__init__.py`
-- [ ] `m.f()` gives a dep on `pkg.a:f` only, not all of `pkg.a`
-- [ ] Star import from a local module resolves names; from an external module the names fall back to that module
+- [x] Relative imports at depth 1 and 2 resolve correctly, including from inside `__init__.py`
+- [x] `m.f()` gives a dep on `pkg.a:f` only, not all of `pkg.a`
+- [x] Star import from a local module resolves names; from an external module the names fall back to that module
 
 **Verification:**
-- [ ] `uv run pytest`: one test per bullet
+- [x] `uv run pytest`: one test per bullet
 
 **Dependencies:** Task 3
 **Files likely touched:** `src/pydep/logic.py`, `tests/test_logic.py`
@@ -115,7 +115,7 @@ package. Refine `import pkg.a as m; m.f()` (and `import pkg.a; pkg.a.f()`) to `p
 ---
 
 ## Checkpoint: Whole project
-- [ ] Tests pass, ruff clean
+- [x] Tests pass, ruff clean
 - [ ] Cross-module zoom verified on the fixture; review with human
 
 ---

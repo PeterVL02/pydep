@@ -68,7 +68,7 @@ Full task details are in `tasks/todo.md`.
 
 ### Phase 2: Whole project
 - [x] Task 3: Index a project root and resolve absolute imports across modules
-- [ ] Task 4: Relative imports, `import x as m; m.f` refinement, star imports
+- [x] Task 4: Relative imports, `import x as m; m.f` refinement, star imports
 
 ### Checkpoint: Whole project
 - [ ] Cross-module zoom correct on the fixture package; review output format with human

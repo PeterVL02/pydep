@@ -12,6 +12,7 @@ import ast
 import builtins
 import symtable
 import sys
+from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,6 +36,8 @@ type Category = Literal["project", "third-party", "stdlib", "unresolved"]
 class DependencyGraph:
     edges: dict[str, set[str]] = field(default_factory=dict)
     aliases: set[str] = field(default_factory=set)  # nodes bound only by imports
+    star_imports: dict[str, set[str]] = field(default_factory=dict)  # module -> sources
+    exports: dict[str, set[str]] = field(default_factory=dict)  # literal __all__
 
 
 def build_graph(path: Path) -> DependencyGraph:
@@ -64,9 +67,11 @@ def build_graph(path: Path) -> DependencyGraph:
     for module, file in sorted(files.items()):
         try:
             source = file.read_text(encoding="utf-8")
-            analyze_module(source, module, str(file), graph, local_modules)
+            is_package = file.name == "__init__.py"
+            analyze_module(source, module, str(file), graph, local_modules, is_package)
         except (SyntaxError, UnicodeDecodeError) as err:
             print(f"warning: skipping {file}: {err}", file=sys.stderr)
+    resolve_star_imports(graph)
     return graph
 
 
@@ -84,24 +89,53 @@ def analyze_module(
     filename: str,
     graph: DependencyGraph,
     local_modules: set[str],
+    is_package: bool,
 ) -> None:
     """Add the symbols of one module and their direct dependencies to `graph`."""
     tree = ast.parse(source, filename)
     statements = list(flatten_statements(tree.body))
-    reads: dict[str, set[str]] = {}
+    package = module if is_package else module.rpartition(".")[0]
     imports: dict[str, set[str]] = {}
     definitions: set[str] = set()
-    spans: list[tuple[int, int, list[str]]] = []
+    for stmt in statements:
+        match stmt:
+            case ast.Import() | ast.ImportFrom():
+                for name, target in import_bindings(stmt, package, local_modules):
+                    imports.setdefault(name, set()).add(target)
+                continue
+            case ast.Assign(
+                targets=[ast.Name(id="__all__")],
+                value=ast.List(elts=elts) | ast.Tuple(elts=elts),
+            ):
+                graph.exports[module] = {
+                    elt.value
+                    for elt in elts
+                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+                }
+        definitions.update(statement_owners(stmt))
+    definitions.discard(MODULE_CODE)
+    if stars := imports.pop("*", set()):
+        graph.star_imports[module] = stars
+    # Names bound to exactly one project module, so `name.attr` can be resolved.
+    module_aliases = {
+        name: min(targets)
+        for name, targets in imports.items()
+        if len(targets) == 1 and targets <= local_modules and name not in definitions
+    }
 
+    reads: dict[str, set[str]] = {}
+    attribute_targets: dict[str, set[str]] = {}
+    bare_aliases: dict[str, set[str]] = {}
+    spans: list[tuple[int, int, list[str]]] = []
     for stmt in statements:
         if isinstance(stmt, ast.Import | ast.ImportFrom):
-            for name, target in import_bindings(stmt, local_modules):
-                imports.setdefault(name, set()).add(target)
             continue
         owners = statement_owners(stmt)
-        definitions.update(owner for owner in owners if owner != MODULE_CODE)
+        targets, bare = module_attribute_reads(stmt, module_aliases, local_modules)
         for owner in owners:
             reads.setdefault(owner, set()).update(module_reads(stmt))
+            attribute_targets.setdefault(owner, set()).update(targets)
+            bare_aliases.setdefault(owner, set()).update(bare)
         start = min(
             [stmt.lineno, *(d.lineno for d in getattr(stmt, "decorator_list", []))]
         )
@@ -126,11 +160,14 @@ def analyze_module(
     if not reads.get(MODULE_CODE):  # e.g. just a docstring
         reads.pop(MODULE_CODE, None)
     for owner, names in reads.items():
+        # A module alias only used as `alias.attr` is replaced by those attributes.
+        names -= module_aliases.keys() - bare_aliases.get(owner, set())
         graph.edges.setdefault(f"{module}:{owner}", set()).update(
             f"{module}:{name}"
             for name in names
             if name in definitions or name in imports or name not in BUILTIN_NAMES
         )
+        graph.edges[f"{module}:{owner}"].update(attribute_targets.get(owner, set()))
     for name, targets in imports.items():
         graph.edges.setdefault(f"{module}:{name}", set()).update(targets)
         if name not in definitions:
@@ -196,12 +233,13 @@ def unpack_target(target: ast.expr) -> Iterator[ast.expr]:
 
 
 def import_bindings(
-    stmt: ast.Import | ast.ImportFrom, local_modules: set[str]
+    stmt: ast.Import | ast.ImportFrom, package: str, local_modules: set[str]
 ) -> Iterator[tuple[str, str]]:
     """Yield `(bound name, target node id)` for each name an import binds.
 
     `from pkg import x` targets the module `pkg.x` if that is a project module,
     else the symbol `pkg:x` if `pkg` is a project module, else the external `pkg`.
+    A star import yields `("*", source module)`.
     """
     for alias in stmt.names:
         if isinstance(stmt, ast.Import):
@@ -209,15 +247,108 @@ def import_bindings(
                 yield alias.asname, alias.name
             else:
                 yield alias.name.split(".")[0], alias.name.split(".")[0]
-        elif alias.name != "*":
-            source = "." * stmt.level + (stmt.module or "")
-            bound = alias.asname or alias.name
-            if f"{source}.{alias.name}" in local_modules:
-                yield bound, f"{source}.{alias.name}"
-            elif source in local_modules:
-                yield bound, f"{source}:{alias.name}"
-            else:
-                yield bound, source
+            continue
+        source = absolute_module(package, stmt.level, stmt.module)
+        bound = alias.asname or alias.name
+        if alias.name == "*":
+            yield "*", source
+        elif f"{source}.{alias.name}" in local_modules:
+            yield bound, f"{source}.{alias.name}"
+        elif source in local_modules:
+            yield bound, f"{source}:{alias.name}"
+        else:
+            yield bound, source
+
+
+def absolute_module(package: str, level: int, name: str | None) -> str:
+    """Turn the source of a possibly relative `from` import into a module name."""
+    if level == 0:
+        return name or ""
+    parts = package.split(".") if package else []
+    base = parts[: max(0, len(parts) - (level - 1))]
+    return ".".join([*base, *([name] if name else [])])
+
+
+def module_attribute_reads(
+    stmt: ast.stmt | ast.expr, module_aliases: dict[str, str], local_modules: set[str]
+) -> tuple[set[str], set[str]]:
+    """Resolve `alias.attr.attr` chains on imported project modules in `stmt`.
+
+    Returns the node ids the chains point at, and the aliases `stmt` also uses
+    bare (not as the start of a chain), which then depend on the whole module.
+    """
+    # ponytail: walks nested function bodies without scope info, so a local that
+    # shadows a module alias is treated as the module. Rare in practice.
+    targets: set[str] = set()
+    chained: Counter[str] = Counter()
+    inner: set[int] = set()
+    for node in ast.walk(stmt):  # breadth-first, so outer chains come first
+        if not isinstance(node, ast.Attribute) or id(node) in inner:
+            continue
+        attrs: list[str] = []
+        current: ast.expr = node
+        while isinstance(current, ast.Attribute):
+            inner.add(id(current))
+            attrs.append(current.attr)
+            current = current.value
+        if isinstance(current, ast.Name) and current.id in module_aliases:
+            chained[current.id] += 1
+            resolved = module_aliases[current.id]
+            for attr in reversed(attrs):
+                if f"{resolved}.{attr}" not in local_modules:
+                    resolved = f"{resolved}:{attr}"
+                    break
+                resolved = f"{resolved}.{attr}"
+            targets.add(resolved)
+    loads = Counter(
+        node.id
+        for node in ast.walk(stmt)
+        if isinstance(node, ast.Name)
+        and isinstance(node.ctx, ast.Load)
+        and node.id in module_aliases
+    )
+    return targets, {name for name, count in loads.items() if count > chained[name]}
+
+
+def resolve_star_imports(graph: DependencyGraph) -> None:
+    """Point unresolved names in modules with star imports at their source."""
+    unresolved = {
+        dep
+        for deps in graph.edges.values()
+        for dep in deps
+        if ":" in dep and dep not in graph.edges
+    }
+    for node in unresolved:
+        module, _, name = node.partition(":")
+        if targets := star_import_targets(graph, module, name, set()):
+            graph.edges[node] = targets
+            graph.aliases.add(node)
+
+
+def star_import_targets(
+    graph: DependencyGraph, module: str, name: str, seen: set[str]
+) -> set[str]:
+    """Find where `name` comes from through `module`'s star imports.
+
+    Returns the defining project symbol, or else every external module that was
+    star-imported (any of them may provide it), or an empty set.
+    """
+    seen.add(module)
+    external: set[str] = set()
+    for source in sorted(graph.star_imports.get(module, set())):
+        if source not in graph.edges:
+            external.add(source)
+            continue
+        exports = graph.exports.get(source)
+        if name not in exports if exports is not None else name.startswith("_"):
+            continue
+        if f"{source}:{name}" in graph.edges:
+            return {f"{source}:{name}"}
+        if source not in seen and (
+            found := star_import_targets(graph, source, name, seen)
+        ):
+            return found
+    return external
 
 
 def module_reads(node: ast.AST) -> set[str]:
