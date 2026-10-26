@@ -52,13 +52,13 @@ symbols + `<module>`). Output is a sorted flat list. The main section has projec
 third-party packages, and stdlib goes in a separate trailing section.
 
 **Acceptance criteria:**
-- [ ] `a -> b -> c` gives zoom(a) = {b, c}, and zoom(a) excludes unrelated symbol `d` and its imports
-- [ ] Mutual recursion (`a <-> b`) terminates and reports each once
-- [ ] Module view equals the union of all symbol closures plus `<module>` deps
+- [x] `a -> b -> c` gives zoom(a) = {b, c}, and zoom(a) excludes unrelated symbol `d` and its imports
+- [x] Mutual recursion (`a <-> b`) terminates and reports each once
+- [x] Module view equals the union of all symbol closures plus `<module>` deps
 
 **Verification:**
-- [ ] `uv run pytest`: chain, cycle, exclusion and union tests
-- [ ] Manual: zoom on one function of a small file, check by eye
+- [x] `uv run pytest`: chain, cycle, exclusion and union tests
+- [x] Manual: zoom on one function of a small file, check by eye
 
 **Dependencies:** Task 1
 **Files likely touched:** `src/pydep/logic.py`, `src/pydep/__init__.py`, `tests/test_logic.py`
@@ -67,7 +67,7 @@ third-party packages, and stdlib goes in a separate trailing section.
 ---
 
 ## Checkpoint: Single file
-- [ ] Tests pass, ruff clean
+- [x] Tests pass, ruff clean
 - [ ] Human looks at the output format before going multi-module
 
 ---

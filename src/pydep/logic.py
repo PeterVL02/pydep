@@ -251,6 +251,28 @@ def direct_dependencies(graph: DependencyGraph, node: str) -> set[str]:
     return set().union(*(resolve(graph, dep) for dep in graph.edges.get(node, ())))
 
 
+def collect_dependencies(graph: DependencyGraph, target: str) -> set[str]:
+    """Return everything `target` transitively depends on, aliases resolved.
+
+    For a module target, the module's own symbols are left out.
+    """
+    seen: set[str] = set()
+    stack = [target]
+    while stack:
+        for dep in direct_dependencies(graph, stack.pop()) - seen:
+            seen.add(dep)
+            stack.append(dep)
+    seen.discard(target)
+    if ":" in target:
+        return seen
+    return {node for node in seen if not node.startswith(f"{target}:")}
+
+
+def modules_of(graph: DependencyGraph) -> list[str]:
+    """Return the sorted names of all analysed project modules."""
+    return sorted(node for node in graph.edges if ":" not in node)
+
+
 def classify(graph: DependencyGraph, node: str) -> Category:
     """Return which group a dependency node belongs to."""
     if node in graph.edges:

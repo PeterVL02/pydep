@@ -61,7 +61,7 @@ Full task details are in `tasks/todo.md`.
 ### Phase 1: Single file, end to end
 - [x] Task 0: Dev tooling (pytest + ruff as dev deps; approved)
 - [x] Task 1: Direct deps per symbol for one file, printed by the CLI
-- [ ] Task 2: Transitive closure, `module:symbol` zoom, module-wide view
+- [x] Task 2: Transitive closure, `module:symbol` zoom, module-wide view
 
 ### Checkpoint: Single file
 - [ ] `pydep file.py:func` shows only func's closure; tests and ruff are clean

@@ -5,7 +5,13 @@ from pathlib import Path
 import pytest
 
 from pydep import main
-from pydep.logic import DependencyGraph, build_graph, classify, direct_dependencies
+from pydep.logic import (
+    DependencyGraph,
+    build_graph,
+    classify,
+    collect_dependencies,
+    direct_dependencies,
+)
 
 
 def write_module(tmp_path: Path, source: str, name: str = "m") -> Path:
@@ -111,3 +117,48 @@ def test_cli_prints_each_symbol_with_its_dependencies(
     main([str(path)])
     out = capsys.readouterr().out
     assert "m:f\n    m:helper\n    stdlib: os\n" in out
+
+
+CHAIN_SOURCE = (
+    "import json\n"
+    "import numpy\n"
+    "def c():\n    return numpy.zeros(1)\n"
+    "def b():\n    return c()\n"
+    "def a():\n    return b()\n"
+    "def d():\n    return json.dumps({})\n"
+    "a()\n"
+)
+
+
+def test_zoom_follows_the_chain_and_excludes_unrelated_symbols(tmp_path: Path) -> None:
+    """A symbol's dependencies are its transitive closure and nothing else."""
+    graph = graph_of(tmp_path, CHAIN_SOURCE)
+    assert collect_dependencies(graph, "m:a") == {"m:b", "m:c", "numpy"}
+
+
+def test_mutual_recursion_terminates(tmp_path: Path) -> None:
+    """Cycles are followed once and the start symbol is not its own dependency."""
+    graph = graph_of(tmp_path, "def a():\n    return b()\ndef b():\n    return a()\n")
+    assert collect_dependencies(graph, "m:a") == {"m:b"}
+
+
+def test_module_view_is_the_union_of_its_symbols_minus_its_own_symbols(
+    tmp_path: Path,
+) -> None:
+    """A module depends on what any of its symbols or top-level code depends on."""
+    graph = graph_of(tmp_path, CHAIN_SOURCE)
+    assert collect_dependencies(graph, "m") == {"numpy", "json"}
+
+
+def test_cli_zoom_prints_only_the_target(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`pydep file.py m:b` prints b's closure and no other symbol."""
+    main([str(write_module(tmp_path, CHAIN_SOURCE)), "m:b"])
+    assert capsys.readouterr().out == "m:b\n    m:c\n    numpy\n\n"
+
+
+def test_cli_rejects_unknown_target(tmp_path: Path) -> None:
+    """An unknown target is a usage error, not an empty result."""
+    with pytest.raises(SystemExit):
+        main([str(write_module(tmp_path, CHAIN_SOURCE)), "m:nope"])
