@@ -10,11 +10,11 @@ Verification commands used throughout:
 Needs explicit user approval first (global rule: no new deps without asking).
 
 **Acceptance criteria:**
-- [ ] `uv add --dev pytest ruff` done, `uv.lock` committed
-- [ ] `uv run pytest` and `uv run ruff check` both run (0 tests is fine)
+- [x] `uv add --dev pytest ruff` done, `uv.lock` committed
+- [x] `uv run pytest` and `uv run ruff check` both run (0 tests is fine)
 
 **Verification:**
-- [ ] `uv sync` from clean works
+- [x] `uv sync` from clean works
 
 **Dependencies:** None (approval)
 **Files likely touched:** `pyproject.toml`, `uv.lock`
@@ -31,13 +31,13 @@ symbol with its *direct* deps. Add a pseudo-symbol `<module>` for top-level stat
 defs or assignments. This replaces the line-based draft `find_resources` in `logic.py` (approved).
 
 **Acceptance criteria:**
-- [ ] A local variable or parameter that shadows a global is not reported as a dep
-- [ ] Decorator, base class, default value and annotation references are reported
-- [ ] `import os` / `import numpy as np` usages show up as `os` (stdlib) / `numpy` (third-party)
+- [x] A local variable or parameter that shadows a global is not reported as a dep
+- [x] Decorator, base class, default value and annotation references are reported
+- [x] `import os` / `import numpy as np` usages show up as `os` (stdlib) / `numpy` (third-party)
 
 **Verification:**
-- [ ] `uv run pytest`: fixture file covering shadowing, decorators, annotations, imports
-- [ ] Manual: `uv run pydep src/pydep/logic.py` prints sensible output on itself
+- [x] `uv run pytest`: fixture file covering shadowing, decorators, annotations, imports
+- [x] Manual: `uv run pydep src/pydep/logic.py` prints sensible output on itself
 
 **Dependencies:** Task 0
 **Files likely touched:** `src/pydep/logic.py`, `src/pydep/__init__.py`, `tests/test_logic.py`
@@ -52,13 +52,13 @@ symbols + `<module>`). Output is a sorted flat list. The main section has projec
 third-party packages, and stdlib goes in a separate trailing section.
 
 **Acceptance criteria:**
-- [ ] `a -> b -> c` gives zoom(a) = {b, c}, and zoom(a) excludes unrelated symbol `d` and its imports
-- [ ] Mutual recursion (`a <-> b`) terminates and reports each once
-- [ ] Module view equals the union of all symbol closures plus `<module>` deps
+- [x] `a -> b -> c` gives zoom(a) = {b, c}, and zoom(a) excludes unrelated symbol `d` and its imports
+- [x] Mutual recursion (`a <-> b`) terminates and reports each once
+- [x] Module view equals the union of all symbol closures plus `<module>` deps
 
 **Verification:**
-- [ ] `uv run pytest`: chain, cycle, exclusion and union tests
-- [ ] Manual: zoom on one function of a small file, check by eye
+- [x] `uv run pytest`: chain, cycle, exclusion and union tests
+- [x] Manual: zoom on one function of a small file, check by eye
 
 **Dependencies:** Task 1
 **Files likely touched:** `src/pydep/logic.py`, `src/pydep/__init__.py`, `tests/test_logic.py`
@@ -67,7 +67,7 @@ third-party packages, and stdlib goes in a separate trailing section.
 ---
 
 ## Checkpoint: Single file
-- [ ] Tests pass, ruff clean
+- [x] Tests pass, ruff clean
 - [ ] Human looks at the output format before going multi-module
 
 ---
@@ -80,13 +80,13 @@ Imports of modules not under ROOT are external leaves. Aliases are collapsed in 
 Files with syntax errors are skipped with a warning.
 
 **Acceptance criteria:**
-- [ ] Zoom on `pkg.b:g` follows into `pkg.a:f` and on into `f`'s own deps, but not `pkg.a`'s other symbols
-- [ ] Re-export `from pkg.a import f` in `pkg/__init__.py` resolves when imported as `from pkg import f`
-- [ ] Unresolvable global names are listed under *unresolved*, not dropped
+- [x] Zoom on `pkg.b:g` follows into `pkg.a:f` and on into `f`'s own deps, but not `pkg.a`'s other symbols
+- [x] Re-export `from pkg.a import f` in `pkg/__init__.py` resolves when imported as `from pkg import f`
+- [x] Unresolvable global names are listed under *unresolved*, not dropped
 
 **Verification:**
-- [ ] `uv run pytest`: multi-module fixture package in `tmp_path`
-- [ ] Manual: `uv run pydep src/` on this repo
+- [x] `uv run pytest`: multi-module fixture package in `tmp_path`
+- [x] Manual: `uv run pydep src/` on this repo
 
 **Dependencies:** Task 2
 **Files likely touched:** `src/pydep/logic.py`, `src/pydep/__init__.py`, `tests/test_logic.py`
@@ -101,12 +101,12 @@ package. Refine `import pkg.a as m; m.f()` (and `import pkg.a; pkg.a.f()`) to `p
 `from pkg.a import *` binds `pkg.a`'s public names (honouring `__all__` when it's a literal list).
 
 **Acceptance criteria:**
-- [ ] Relative imports at depth 1 and 2 resolve correctly, including from inside `__init__.py`
-- [ ] `m.f()` gives a dep on `pkg.a:f` only, not all of `pkg.a`
-- [ ] Star import from a local module resolves names; from an external module the names fall back to that module
+- [x] Relative imports at depth 1 and 2 resolve correctly, including from inside `__init__.py`
+- [x] `m.f()` gives a dep on `pkg.a:f` only, not all of `pkg.a`
+- [x] Star import from a local module resolves names; from an external module the names fall back to that module
 
 **Verification:**
-- [ ] `uv run pytest`: one test per bullet
+- [x] `uv run pytest`: one test per bullet
 
 **Dependencies:** Task 3
 **Files likely touched:** `src/pydep/logic.py`, `tests/test_logic.py`
@@ -115,7 +115,7 @@ package. Refine `import pkg.a as m; m.f()` (and `import pkg.a; pkg.a.f()`) to `p
 ---
 
 ## Checkpoint: Whole project
-- [ ] Tests pass, ruff clean
+- [x] Tests pass, ruff clean
 - [ ] Cross-module zoom verified on the fixture; review with human
 
 ---
@@ -126,12 +126,12 @@ over the graph, children sorted, each node expanded once and repeats shown as `n
 Cycles are shown as repeats. Stdlib leaves follow the same main/separate rule as the flat list.
 
 **Acceptance criteria:**
-- [ ] A diamond (`a->b->d`, `a->c->d`) expands `d` once, then shows `d (see above)`
-- [ ] A cycle terminates
-- [ ] The set of nodes in the tree equals the flat-list closure
+- [x] A diamond (`a->b->d`, `a->c->d`) expands `d` once, then shows `d (see above)`
+- [x] A cycle terminates
+- [x] The set of nodes in the tree equals the flat-list closure
 
 **Verification:**
-- [ ] `uv run pytest`: diamond, cycle and equality tests
+- [x] `uv run pytest`: diamond, cycle and equality tests
 
 **Dependencies:** Task 4
 **Files likely touched:** `src/pydep/logic.py`, `src/pydep/__init__.py`, `tests/test_logic.py`
@@ -145,12 +145,12 @@ graph), or says there is none. `--rdeps` inverts the graph and prints everything
 depends on the target (e.g. "what breaks if I change `pkg.a:f`").
 
 **Acceptance criteria:**
-- [ ] `--why` returns the shortest path when more than one exists, and "no path" for an unrelated node
-- [ ] `--rdeps pkg.a:f` lists all transitive users, including users that reach it through re-exports
-- [ ] `--rdeps numpy` lists every project symbol that uses numpy
+- [x] `--why` returns the shortest path when more than one exists, and "no path" for an unrelated node
+- [x] `--rdeps pkg.a:f` lists all transitive users, including users that reach it through re-exports
+- [x] `--rdeps numpy` lists every project symbol that uses numpy
 
 **Verification:**
-- [ ] `uv run pytest`: one test per bullet
+- [x] `uv run pytest`: one test per bullet
 
 **Dependencies:** Task 4
 **Files likely touched:** `src/pydep/logic.py`, `src/pydep/__init__.py`, `tests/test_logic.py`
@@ -159,8 +159,8 @@ depends on the target (e.g. "what breaks if I change `pkg.a:f`").
 ---
 
 ## Checkpoint: Explore
-- [ ] Tests pass, ruff clean
-- [ ] Tree, `--why` and `--rdeps` agree with the flat list on the fixture package
+- [x] Tests pass, ruff clean
+- [x] Tree, `--why` and `--rdeps` agree with the flat list on the fixture package
 
 ---
 
@@ -170,13 +170,13 @@ or another local repo. Fix crashes and wrong resolutions found there (add a regr
 each). Write README usage and known limits (untyped attribute calls, dynamic imports).
 
 **Acceptance criteria:**
-- [ ] Runs to completion on a real project with no tracebacks
-- [ ] Every bug found has a regression test
-- [ ] README documents the CLI and its limits
+- [x] Runs to completion on a real project with no tracebacks
+- [x] Every bug found has a regression test
+- [x] README documents the CLI and its limits
 
 **Verification:**
-- [ ] `uv run pytest`, `uv run ruff check`, `uv run ruff format`
-- [ ] Manual: spot-check 3 symbols' output against reading the source
+- [x] `uv run pytest`, `uv run ruff check`, `uv run ruff format`
+- [x] Manual: spot-check 3 symbols' output against reading the source
 
 **Dependencies:** Tasks 5, 6
 **Files likely touched:** `src/pydep/logic.py`, `tests/test_logic.py`, `README.md`
@@ -185,5 +185,5 @@ each). Write README usage and known limits (untyped attribute calls, dynamic imp
 ---
 
 ## Checkpoint: Complete
-- [ ] All acceptance criteria met
-- [ ] Ready for review
+- [x] All acceptance criteria met
+- [x] Ready for review
