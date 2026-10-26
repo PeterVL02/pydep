@@ -13,7 +13,7 @@ import builtins
 import symtable
 import sys
 from collections import Counter, defaultdict, deque
-from collections.abc import Iterator
+from typing import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
