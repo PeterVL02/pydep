@@ -67,7 +67,7 @@ Full task details are in `tasks/todo.md`.
 - [ ] `pydep file.py:func` shows only func's closure; tests and ruff are clean
 
 ### Phase 2: Whole project
-- [ ] Task 3: Index a project root and resolve absolute imports across modules
+- [x] Task 3: Index a project root and resolve absolute imports across modules
 - [ ] Task 4: Relative imports, `import x as m; m.f` refinement, star imports
 
 ### Checkpoint: Whole project

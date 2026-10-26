@@ -38,14 +38,52 @@ class DependencyGraph:
 
 
 def build_graph(path: Path) -> DependencyGraph:
-    """Analyse the Python file at `path` and return its dependency graph."""
-    graph = DependencyGraph()
-    analyze_module(path.read_text(encoding="utf-8"), path.stem, str(path), graph)
+    """Analyse a Python file, or every `.py` file under a directory.
+
+    Module names are dotted paths relative to the directory; if the directory is a
+    package itself, its parent is used so the package name is kept. Hidden
+    directories are skipped, and so are files that can't be parsed (with a warning
+    on stderr).
+    """
+    if path.is_file():
+        files = {path.stem: path}
+    else:
+        base = path.parent if (path / "__init__.py").exists() else path
+        files = {
+            module_name(file, base): file
+            for file in path.rglob("*.py")
+            if not any(part.startswith(".") for part in file.relative_to(path).parts)
+        }
+    # Every package prefix counts as a module, so namespace packages resolve too.
+    local_modules = {
+        ".".join(parts[:i])
+        for parts in (name.split(".") for name in files)
+        for i in range(1, len(parts) + 1)
+    }
+    graph = DependencyGraph(edges={name: set() for name in local_modules})
+    for module, file in sorted(files.items()):
+        try:
+            source = file.read_text(encoding="utf-8")
+            analyze_module(source, module, str(file), graph, local_modules)
+        except (SyntaxError, UnicodeDecodeError) as err:
+            print(f"warning: skipping {file}: {err}", file=sys.stderr)
     return graph
 
 
+def module_name(file: Path, base: Path) -> str:
+    """Return the dotted module name of `file` relative to `base`."""
+    parts = file.relative_to(base).with_suffix("").parts
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    return ".".join(parts)
+
+
 def analyze_module(
-    source: str, module: str, filename: str, graph: DependencyGraph
+    source: str,
+    module: str,
+    filename: str,
+    graph: DependencyGraph,
+    local_modules: set[str],
 ) -> None:
     """Add the symbols of one module and their direct dependencies to `graph`."""
     tree = ast.parse(source, filename)
@@ -57,7 +95,7 @@ def analyze_module(
 
     for stmt in statements:
         if isinstance(stmt, ast.Import | ast.ImportFrom):
-            for name, target in import_bindings(stmt):
+            for name, target in import_bindings(stmt, local_modules):
                 imports.setdefault(name, set()).add(target)
             continue
         owners = statement_owners(stmt)
@@ -157,8 +195,14 @@ def unpack_target(target: ast.expr) -> Iterator[ast.expr]:
             yield target
 
 
-def import_bindings(stmt: ast.Import | ast.ImportFrom) -> Iterator[tuple[str, str]]:
-    """Yield `(bound name, target node id)` for each name an import binds."""
+def import_bindings(
+    stmt: ast.Import | ast.ImportFrom, local_modules: set[str]
+) -> Iterator[tuple[str, str]]:
+    """Yield `(bound name, target node id)` for each name an import binds.
+
+    `from pkg import x` targets the module `pkg.x` if that is a project module,
+    else the symbol `pkg:x` if `pkg` is a project module, else the external `pkg`.
+    """
     for alias in stmt.names:
         if isinstance(stmt, ast.Import):
             if alias.asname:
@@ -166,7 +210,14 @@ def import_bindings(stmt: ast.Import | ast.ImportFrom) -> Iterator[tuple[str, st
             else:
                 yield alias.name.split(".")[0], alias.name.split(".")[0]
         elif alias.name != "*":
-            yield alias.asname or alias.name, "." * stmt.level + (stmt.module or "")
+            source = "." * stmt.level + (stmt.module or "")
+            bound = alias.asname or alias.name
+            if f"{source}.{alias.name}" in local_modules:
+                yield bound, f"{source}.{alias.name}"
+            elif source in local_modules:
+                yield bound, f"{source}:{alias.name}"
+            else:
+                yield bound, source
 
 
 def module_reads(node: ast.AST) -> set[str]:
@@ -239,11 +290,19 @@ def walk_tables(table: symtable.SymbolTable) -> Iterator[symtable.SymbolTable]:
         yield from walk_tables(child)
 
 
-def resolve(graph: DependencyGraph, node: str) -> set[str]:
-    """Follow import aliases from `node` to the nodes they point at."""
+def resolve(
+    graph: DependencyGraph, node: str, seen: frozenset[str] = frozenset()
+) -> set[str]:
+    """Follow import aliases from `node` to the nodes they point at.
+
+    Aliases that only import each other in a cycle resolve to nothing.
+    """
     if node not in graph.aliases:
         return {node}
-    return set().union(*(resolve(graph, t) for t in graph.edges[node]))
+    if node in seen:
+        return set()
+    seen |= {node}
+    return set().union(*(resolve(graph, t, seen) for t in graph.edges[node]))
 
 
 def direct_dependencies(graph: DependencyGraph, node: str) -> set[str]:

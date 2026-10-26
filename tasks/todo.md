@@ -80,13 +80,13 @@ Imports of modules not under ROOT are external leaves. Aliases are collapsed in 
 Files with syntax errors are skipped with a warning.
 
 **Acceptance criteria:**
-- [ ] Zoom on `pkg.b:g` follows into `pkg.a:f` and on into `f`'s own deps, but not `pkg.a`'s other symbols
-- [ ] Re-export `from pkg.a import f` in `pkg/__init__.py` resolves when imported as `from pkg import f`
-- [ ] Unresolvable global names are listed under *unresolved*, not dropped
+- [x] Zoom on `pkg.b:g` follows into `pkg.a:f` and on into `f`'s own deps, but not `pkg.a`'s other symbols
+- [x] Re-export `from pkg.a import f` in `pkg/__init__.py` resolves when imported as `from pkg import f`
+- [x] Unresolvable global names are listed under *unresolved*, not dropped
 
 **Verification:**
-- [ ] `uv run pytest`: multi-module fixture package in `tmp_path`
-- [ ] Manual: `uv run pydep src/` on this repo
+- [x] `uv run pytest`: multi-module fixture package in `tmp_path`
+- [x] Manual: `uv run pydep src/` on this repo
 
 **Dependencies:** Task 2
 **Files likely touched:** `src/pydep/logic.py`, `src/pydep/__init__.py`, `tests/test_logic.py`

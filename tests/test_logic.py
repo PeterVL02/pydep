@@ -11,6 +11,7 @@ from pydep.logic import (
     classify,
     collect_dependencies,
     direct_dependencies,
+    modules_of,
 )
 
 
@@ -162,3 +163,66 @@ def test_cli_rejects_unknown_target(tmp_path: Path) -> None:
     """An unknown target is a usage error, not an empty result."""
     with pytest.raises(SystemExit):
         main([str(write_module(tmp_path, CHAIN_SOURCE)), "m:nope"])
+
+
+PACKAGE = {
+    "pkg/__init__.py": "from pkg.a import f\n",
+    "pkg/a.py": (
+        "import numpy\n"
+        "LIMIT = 1\n"
+        "def f():\n    return LIMIT\n"
+        "def other():\n    return numpy.zeros(1)\n"
+    ),
+    "pkg/b.py": (
+        "from pkg.a import f\n"
+        "from pkg import f as reexported\n"
+        "from pkg.a import missing\n"
+        "def g():\n    return f()\n"
+        "def h():\n    return reexported()\n"
+        "def bad():\n    return missing\n"
+    ),
+}
+
+
+def write_package(root: Path, files: dict[str, str]) -> Path:
+    """Write `files` (relative path -> source) under `root` and return `root`."""
+    for relative, source in files.items():
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source, encoding="utf-8")
+    return root
+
+
+def test_zoom_crosses_modules_but_skips_unused_symbols(tmp_path: Path) -> None:
+    """Importing f from pkg.a pulls in f's deps, not the rest of pkg.a."""
+    graph = build_graph(write_package(tmp_path, PACKAGE))
+    assert collect_dependencies(graph, "pkg.b:g") == {"pkg.a:f", "pkg.a:LIMIT"}
+
+
+def test_reexport_through_init_resolves_to_the_definition(tmp_path: Path) -> None:
+    """`from pkg import f` follows pkg/__init__.py's import to pkg.a:f."""
+    graph = build_graph(write_package(tmp_path, PACKAGE))
+    assert collect_dependencies(graph, "pkg.b:h") == {"pkg.a:f", "pkg.a:LIMIT"}
+
+
+def test_importing_a_missing_name_is_unresolved(tmp_path: Path) -> None:
+    """A name imported from a project module that doesn't define it is unresolved."""
+    graph = build_graph(write_package(tmp_path, PACKAGE))
+    assert collect_dependencies(graph, "pkg.b:bad") == {"pkg.a:missing"}
+    assert classify(graph, "pkg.a:missing") == "unresolved"
+
+
+def test_root_that_is_itself_a_package_keeps_the_package_name(tmp_path: Path) -> None:
+    """Pointing at the package directory gives the same module names as its parent."""
+    graph = build_graph(write_package(tmp_path, PACKAGE) / "pkg")
+    assert "pkg.a" in modules_of(graph)
+
+
+def test_files_with_syntax_errors_are_skipped_with_a_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """One broken file doesn't stop the analysis of the rest."""
+    files = PACKAGE | {"pkg/broken.py": "def (:\n"}
+    graph = build_graph(write_package(tmp_path, files))
+    assert "pkg.a" in modules_of(graph)
+    assert "broken.py" in capsys.readouterr().err

@@ -17,7 +17,9 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="pydep", description="List what each function, class and constant uses."
     )
-    parser.add_argument("path", type=Path, help="Python file to analyse")
+    parser.add_argument(
+        "path", type=Path, help="Python file or project directory (e.g. src/)"
+    )
     parser.add_argument(
         "target",
         nargs="?",
