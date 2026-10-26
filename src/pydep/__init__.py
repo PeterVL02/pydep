@@ -8,6 +8,7 @@ from pydep.logic import (
     collect_dependencies,
     format_dependencies,
     modules_of,
+    render_tree,
     symbols_of,
 )
 
@@ -25,6 +26,9 @@ def main(argv: list[str] | None = None) -> None:
         nargs="?",
         help="module (pkg.mod) or symbol (pkg.mod:name) to zoom in on",
     )
+    parser.add_argument(
+        "--tree", action="store_true", help="show dependencies as a tree"
+    )
     args = parser.parse_args(argv)
 
     graph = build_graph(args.path)
@@ -35,5 +39,8 @@ def main(argv: list[str] | None = None) -> None:
     else:
         targets = [t for m in modules_of(graph) for t in [m, *symbols_of(graph, m)]]
     for target in targets:
-        deps = collect_dependencies(graph, target)
-        print(format_dependencies(graph, target, deps))
+        if args.tree:
+            print(render_tree(graph, target))
+        else:
+            deps = collect_dependencies(graph, target)
+            print(format_dependencies(graph, target, deps))

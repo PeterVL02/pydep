@@ -74,7 +74,7 @@ Full task details are in `tasks/todo.md`.
 - [ ] Cross-module zoom correct on the fixture package; review output format with human
 
 ### Phase 3: Explore the graph
-- [ ] Task 5: `--tree` view of a target's deps
+- [x] Task 5: `--tree` view of a target's deps
 - [ ] Task 6: `--why X` path search and `--rdeps` reverse lookup
 
 ### Checkpoint: Explore

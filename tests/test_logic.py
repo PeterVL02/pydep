@@ -12,6 +12,7 @@ from pydep.logic import (
     collect_dependencies,
     direct_dependencies,
     modules_of,
+    render_tree,
 )
 
 
@@ -318,3 +319,43 @@ def test_star_import_honours_literal_dunder_all(tmp_path: Path) -> None:
     graph = build_graph(write_package(tmp_path, files))
     assert collect_dependencies(graph, "pkg.f:g") == {"pkg.e:pub"}
     assert collect_dependencies(graph, "pkg.f:h") == {"pkg.f:hidden"}
+
+
+def test_tree_expands_a_shared_dependency_once(tmp_path: Path) -> None:
+    """In a diamond, the second path to d points back instead of repeating d."""
+    graph = graph_of(
+        tmp_path,
+        "import os\n"
+        "def d():\n    return os.sep\n"
+        "def b():\n    return d()\n"
+        "def c():\n    return d()\n"
+        "def a():\n    return b(), c()\n",
+    )
+    assert render_tree(graph, "m:a") == (
+        "m:a\n    m:b\n        m:d\n    m:c\n        m:d (see above)\n    stdlib: os\n"
+    )
+
+
+def test_tree_terminates_on_cycles(tmp_path: Path) -> None:
+    """A cycle shows the start again as a back-reference and stops."""
+    graph = graph_of(tmp_path, "def a():\n    return b()\ndef b():\n    return a()\n")
+    assert render_tree(graph, "m:a") == "m:a\n    m:b\n        m:a (see above)\n"
+
+
+def test_tree_contains_the_same_nodes_as_the_flat_list(tmp_path: Path) -> None:
+    """The tree is just another view of the same closure."""
+    graph = build_graph(write_package(tmp_path, IMPORT_STYLES))
+    target = "pkg.sub.c:uses_module_value"
+    tree_nodes = {
+        line.strip().removesuffix(" (see above)")
+        for line in render_tree(graph, target).splitlines()[1:]
+    }
+    assert tree_nodes == collect_dependencies(graph, target)
+
+
+def test_cli_tree_flag_prints_the_tree(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--tree` switches the output to the tree view."""
+    main([str(write_module(tmp_path, CHAIN_SOURCE)), "m:b", "--tree"])
+    assert capsys.readouterr().out == "m:b\n    m:c\n        numpy\n\n"

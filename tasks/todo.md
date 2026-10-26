@@ -126,12 +126,12 @@ over the graph, children sorted, each node expanded once and repeats shown as `n
 Cycles are shown as repeats. Stdlib leaves follow the same main/separate rule as the flat list.
 
 **Acceptance criteria:**
-- [ ] A diamond (`a->b->d`, `a->c->d`) expands `d` once, then shows `d (see above)`
-- [ ] A cycle terminates
-- [ ] The set of nodes in the tree equals the flat-list closure
+- [x] A diamond (`a->b->d`, `a->c->d`) expands `d` once, then shows `d (see above)`
+- [x] A cycle terminates
+- [x] The set of nodes in the tree equals the flat-list closure
 
 **Verification:**
-- [ ] `uv run pytest`: diamond, cycle and equality tests
+- [x] `uv run pytest`: diamond, cycle and equality tests
 
 **Dependencies:** Task 4
 **Files likely touched:** `src/pydep/logic.py`, `src/pydep/__init__.py`, `tests/test_logic.py`

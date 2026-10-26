@@ -492,6 +492,36 @@ def format_dependencies(graph: DependencyGraph, title: str, deps: set[str]) -> s
     return "\n".join(lines) + "\n"
 
 
+def render_tree(graph: DependencyGraph, target: str) -> str:
+    """Render `target`'s dependencies as an indented tree.
+
+    Each node is expanded once; later occurrences of a node with dependencies are
+    marked `(see above)`. Stdlib leaves are listed once at the end.
+    """
+    lines: list[str] = []
+    expanded: set[str] = set()
+    stdlib: set[str] = set()
+    stack = [(target, 0)]
+    while stack:
+        node, depth = stack.pop()
+        indent = "    " * depth
+        if node in expanded:
+            seen_marker = " (see above)" if graph.edges.get(node) else ""
+            lines.append(f"{indent}{node}{seen_marker}")
+            continue
+        expanded.add(node)
+        unresolved = classify(graph, node) == "unresolved"
+        lines.append(f"{indent}{node}{' (unresolved)' if unresolved else ''}")
+        for dep in sorted(direct_dependencies(graph, node) - {node}, reverse=True):
+            if classify(graph, dep) == "stdlib":
+                stdlib.add(dep)
+            else:
+                stack.append((dep, depth + 1))
+    if stdlib:
+        lines.append(f"    stdlib: {', '.join(sorted(stdlib))}")
+    return "\n".join(lines) + "\n"
+
+
 def symbols_of(graph: DependencyGraph, module: str) -> list[str]:
     """Return the sorted non-alias symbol ids defined in `module`."""
     return sorted(
