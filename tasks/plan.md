@@ -75,7 +75,7 @@ Full task details are in `tasks/todo.md`.
 
 ### Phase 3: Explore the graph
 - [x] Task 5: `--tree` view of a target's deps
-- [ ] Task 6: `--why X` path search and `--rdeps` reverse lookup
+- [x] Task 6: `--why X` path search and `--rdeps` reverse lookup
 
 ### Checkpoint: Explore
 - [ ] Tree and searches agree with the flat list on the fixture package

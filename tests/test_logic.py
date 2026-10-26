@@ -11,8 +11,10 @@ from pydep.logic import (
     classify,
     collect_dependencies,
     direct_dependencies,
+    find_path,
     modules_of,
     render_tree,
+    reverse_dependencies,
 )
 
 
@@ -359,3 +361,60 @@ def test_cli_tree_flag_prints_the_tree(
     """`--tree` switches the output to the tree view."""
     main([str(write_module(tmp_path, CHAIN_SOURCE)), "m:b", "--tree"])
     assert capsys.readouterr().out == "m:b\n    m:c\n        numpy\n\n"
+
+
+TWO_PATHS = (
+    "def d(): ...\n"
+    "def c():\n    return d()\n"
+    "def b():\n    return c()\n"
+    "def e():\n    return d()\n"
+    "def a():\n    return b(), e()\n"
+)
+
+
+def test_why_returns_the_shortest_path(tmp_path: Path) -> None:
+    """With a->b->c->d and a->e->d, the path via e is reported."""
+    graph = graph_of(tmp_path, TWO_PATHS)
+    assert find_path(graph, "m:a", "m:d") == ["m:a", "m:e", "m:d"]
+
+
+def test_why_returns_none_when_there_is_no_path(tmp_path: Path) -> None:
+    """Dependencies only point one way."""
+    graph = graph_of(tmp_path, TWO_PATHS)
+    assert find_path(graph, "m:d", "m:a") is None
+
+
+def test_rdeps_includes_users_that_go_through_reexports(tmp_path: Path) -> None:
+    """Users of pkg.a:f include those importing it via pkg/__init__.py."""
+    graph = build_graph(write_package(tmp_path, PACKAGE))
+    assert reverse_dependencies(graph, "pkg.a:f") == {"pkg.b:g", "pkg.b:h"}
+
+
+def test_rdeps_of_an_external_package_lists_its_users(tmp_path: Path) -> None:
+    """`--rdeps numpy` lists every project symbol that ends up using numpy."""
+    graph = build_graph(write_package(tmp_path, PACKAGE))
+    assert reverse_dependencies(graph, "numpy") == {"pkg.a:other"}
+
+
+def test_rdeps_of_a_module_lists_users_of_any_of_its_symbols(tmp_path: Path) -> None:
+    """Users of a module are users of anything in it, outside the module."""
+    graph = build_graph(write_package(tmp_path, PACKAGE))
+    assert reverse_dependencies(graph, "pkg.a") == {"pkg.b:g", "pkg.b:h"}
+
+
+def test_cli_why_prints_the_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--why X` prints the chain from the target to X."""
+    main([str(write_module(tmp_path, TWO_PATHS)), "m:a", "--why", "m:d"])
+    assert capsys.readouterr().out == "m:a -> m:e -> m:d\n"
+
+
+def test_cli_rdeps_accepts_an_external_target(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--rdeps` works for external packages, which aren't graph keys."""
+    main([str(write_module(tmp_path, CHAIN_SOURCE)), "numpy", "--rdeps"])
+    assert capsys.readouterr().out == (
+        "numpy is used by\n    m:<module>\n    m:a\n    m:b\n    m:c\n\n"
+    )

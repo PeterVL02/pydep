@@ -145,12 +145,12 @@ graph), or says there is none. `--rdeps` inverts the graph and prints everything
 depends on the target (e.g. "what breaks if I change `pkg.a:f`").
 
 **Acceptance criteria:**
-- [ ] `--why` returns the shortest path when more than one exists, and "no path" for an unrelated node
-- [ ] `--rdeps pkg.a:f` lists all transitive users, including users that reach it through re-exports
-- [ ] `--rdeps numpy` lists every project symbol that uses numpy
+- [x] `--why` returns the shortest path when more than one exists, and "no path" for an unrelated node
+- [x] `--rdeps pkg.a:f` lists all transitive users, including users that reach it through re-exports
+- [x] `--rdeps numpy` lists every project symbol that uses numpy
 
 **Verification:**
-- [ ] `uv run pytest`: one test per bullet
+- [x] `uv run pytest`: one test per bullet
 
 **Dependencies:** Task 4
 **Files likely touched:** `src/pydep/logic.py`, `src/pydep/__init__.py`, `tests/test_logic.py`
@@ -159,8 +159,8 @@ depends on the target (e.g. "what breaks if I change `pkg.a:f`").
 ---
 
 ## Checkpoint: Explore
-- [ ] Tests pass, ruff clean
-- [ ] Tree, `--why` and `--rdeps` agree with the flat list on the fixture package
+- [x] Tests pass, ruff clean
+- [x] Tree, `--why` and `--rdeps` agree with the flat list on the fixture package
 
 ---
 

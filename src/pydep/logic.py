@@ -12,7 +12,7 @@ import ast
 import builtins
 import symtable
 import sys
-from collections import Counter
+from collections import Counter, deque
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -456,6 +456,46 @@ def collect_dependencies(graph: DependencyGraph, target: str) -> set[str]:
     if ":" in target:
         return seen
     return {node for node in seen if not node.startswith(f"{target}:")}
+
+
+def find_path(graph: DependencyGraph, start: str, goal: str) -> list[str] | None:
+    """Return the shortest dependency chain from `start` to `goal`, or None."""
+    previous: dict[str, str] = {}
+    queue = deque([start])
+    while queue:
+        node = queue.popleft()
+        if node == goal:
+            path = [node]
+            while path[-1] != start:
+                path.append(previous[path[-1]])
+            return path[::-1]
+        for dep in sorted(direct_dependencies(graph, node)):
+            if dep not in previous and dep != start:
+                previous[dep] = node
+                queue.append(dep)
+    return None
+
+
+def reverse_dependencies(graph: DependencyGraph, target: str) -> set[str]:
+    """Return every project symbol that transitively depends on `target`.
+
+    For a module target, users of any of its symbols count, except the module's
+    own symbols.
+    """
+    users: dict[str, set[str]] = {}
+    for node in graph.edges.keys() - graph.aliases:
+        for dep in direct_dependencies(graph, node):
+            users.setdefault(dep, set()).add(node)
+    is_module = target in graph.edges and ":" not in target
+    own = set(symbols_of(graph, target)) if is_module else set()
+    seen: set[str] = set()
+    stack = [target, *own]
+    while stack:
+        for user in users.get(stack.pop(), set()) - seen:
+            seen.add(user)
+            stack.append(user)
+    # Module nodes are passed through but not reported; every module uses its own.
+    return {node for node in seen - own if ":" in node and node != target}
 
 
 def modules_of(graph: DependencyGraph) -> list[str]:
